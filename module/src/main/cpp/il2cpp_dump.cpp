@@ -335,12 +335,27 @@ void il2cpp_api_init(void *handle) {
         LOGE("Failed to initialize il2cpp api.");
         return;
     }
-    while (!il2cpp_is_vm_thread(nullptr)) {
-        LOGI("Waiting for il2cpp_init...");
-        sleep(1);
+    if (il2cpp_is_vm_thread) {
+        while (!il2cpp_is_vm_thread(nullptr)) {
+            LOGI("Waiting for il2cpp_init...");
+            sleep(1);
+        }
+    } else {
+        LOGW("il2cpp_is_vm_thread missing, waiting 30s for init");
+        sleep(30);
     }
-    auto domain = il2cpp_domain_get();
-    il2cpp_thread_attach(domain);
+    if (il2cpp_domain_get && il2cpp_thread_attach) {
+        auto domain = il2cpp_domain_get();
+        il2cpp_thread_attach(domain);
+    }
+}
+
+bool il2cpp_api_complete() {
+    return il2cpp_domain_get && il2cpp_domain_get_assemblies && il2cpp_assembly_get_image &&
+           il2cpp_image_get_name && il2cpp_image_get_class_count && il2cpp_image_get_class &&
+           il2cpp_class_get_name && il2cpp_class_get_namespace && il2cpp_class_get_fields &&
+           il2cpp_class_get_methods && il2cpp_field_get_name && il2cpp_method_get_name &&
+           il2cpp_type_get_name && il2cpp_class_from_type;
 }
 
 void il2cpp_dump(const char *outDir) {

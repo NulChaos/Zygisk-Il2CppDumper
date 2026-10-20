@@ -4,6 +4,7 @@
 
 #include "hack.h"
 #include "il2cpp_dump.h"
+#include "mem_dump.h"
 #include "log.h"
 #include "xdl.h"
 #include <cstring>
@@ -25,7 +26,13 @@ void hack_start(const char *game_data_dir) {
             load = true;
             LOGI("libil2cpp.so found after %d s", i);
             il2cpp_api_init(handle);
-            il2cpp_dump(game_data_dir);
+            sleep(5);
+            mem_dump(game_data_dir);
+            if (il2cpp_api_complete()) {
+                il2cpp_dump(game_data_dir);
+            } else {
+                LOGW("il2cpp exports stripped; skipping API dump (use memory dump files)");
+            }
             break;
         } else {
             sleep(1);
