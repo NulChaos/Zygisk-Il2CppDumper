@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/uio.h>
+#include <cerrno>
 
 struct MapRegion {
     uint64_t start, end;
@@ -44,9 +46,27 @@ static std::vector<MapRegion> read_maps() {
     return out;
 }
 
-// Safe read via /proc/self/mem: returns bytes read, never faults.
-static ssize_t safe_read(int memfd, uint64_t addr, void *buf, size_t len) {
-    return pread64(memfd, buf, len, (off64_t) addr);
+// Safe read via process_vm_readv on our own pid: returns bytes read, never faults,
+// and works even when the game marks itself non-dumpable (which locks /proc/self/mem).
+static ssize_t safe_read(int /*unused*/, uint64_t addr, void *buf, size_t len) {
+    size_t done = 0;
+    const size_t PAGE = 4096;
+    while (done < len) {
+        size_t n = std::min(len - done, (size_t) (1 << 20));
+        iovec local{(uint8_t *) buf + done, n};
+        iovec remote{(void *) (addr + done), n};
+        ssize_t r = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+        if (r > 0) {
+            done += r;
+            continue;
+        }
+        // hit an unreadable page: try to skip it page by page
+        if (n <= PAGE) break;
+        size_t skip = PAGE - ((addr + done) % PAGE);
+        memset((uint8_t *) buf + done, 0, std::min(skip, len - done));
+        done += std::min(skip, len - done);
+    }
+    return (ssize_t) done;
 }
 
 static bool write_region(int memfd, uint64_t start, uint64_t end, const std::string &outPath,
@@ -92,10 +112,14 @@ static bool looks_like_metadata(const int32_t *h, uint64_t avail) {
 
 void mem_dump(const char *game_data_dir) {
     std::string outDir = std::string(game_data_dir) + "/files/";
-    int memfd = open("/proc/self/mem", O_RDONLY);
-    if (memfd < 0) {
-        LOGE("memdump: cannot open /proc/self/mem");
-        return;
+    int memfd = -1;
+    {
+        uint8_t probe[4];
+        iovec l{probe, 4}, r{(void *) &probe, 4};
+        if (process_vm_readv(getpid(), &l, 1, &r, 1, 0) != 4) {
+            LOGE("memdump: process_vm_readv not permitted (errno %d)", errno);
+            return;
+        }
     }
     auto maps = read_maps();
     LOGI("memdump: %zu map regions", maps.size());
@@ -171,7 +195,6 @@ void mem_dump(const char *game_data_dir) {
             }
         }
     }
-    close(memfd);
 
     char hdr[256];
     snprintf(hdr, sizeof(hdr), "libil2cpp base: 0x%" PRIx64 "\nmetadata candidates: %d\n",
